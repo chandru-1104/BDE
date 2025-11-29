@@ -16,14 +16,25 @@ import {
   FileText,
   CheckCircle,
   Clock,
+  Edit2,
+  Trash2,
 } from 'lucide-react';
+import LeadModal from './LeadModal';
+import ActivityModal from './ActivityModal';
+import { BarChart, PieChart, LineChart, getLeadsByStatus, getLeadsBySource } from './Charts';
+import { seedSampleData } from '../lib/seedData';
 
 export default function Dashboard() {
   const { user, signOut } = useAuth();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'leads' | 'activities'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'leads' | 'activities' | 'analytics'>('overview');
+  const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
+  const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
+  const [editingLead, setEditingLead] = useState<Lead | undefined>();
+  const [editingActivity, setEditingActivity] = useState<Activity | undefined>();
+  const [seeding, setSeeding] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -45,6 +56,66 @@ export default function Dashboard() {
     }
   };
 
+  const handleSaveLead = (lead: Lead) => {
+    setLeads((prev) => {
+      const existing = prev.find((l) => l.id === lead.id);
+      if (existing) {
+        return prev.map((l) => (l.id === lead.id ? lead : l));
+      }
+      return [lead, ...prev];
+    });
+  };
+
+  const handleSaveActivity = (activity: Activity) => {
+    setActivities((prev) => {
+      const existing = prev.find((a) => a.id === activity.id);
+      if (existing) {
+        return prev.map((a) => (a.id === activity.id ? activity : a));
+      }
+      return [activity, ...prev];
+    });
+  };
+
+  const handleDeleteLead = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this lead?')) return;
+
+    try {
+      const { error } = await supabase.from('leads').delete().eq('id', id);
+      if (error) throw error;
+      setLeads((prev) => prev.filter((l) => l.id !== id));
+    } catch (error) {
+      console.error('Error deleting lead:', error);
+    }
+  };
+
+  const handleDeleteActivity = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this activity?')) return;
+
+    try {
+      const { error } = await supabase.from('activities').delete().eq('id', id);
+      if (error) throw error;
+      setActivities((prev) => prev.filter((a) => a.id !== id));
+    } catch (error) {
+      console.error('Error deleting activity:', error);
+    }
+  };
+
+  const handleToggleActivityComplete = async (activity: Activity) => {
+    try {
+      const { data, error } = await supabase
+        .from('activities')
+        .update({ completed: !activity.completed })
+        .eq('id', activity.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      if (data) handleSaveActivity(data);
+    } catch (error) {
+      console.error('Error updating activity:', error);
+    }
+  };
+
   const stats = {
     totalLeads: leads.length,
     activeLeads: leads.filter((l) => ['new', 'contacted', 'qualified', 'negotiating'].includes(l.status)).length,
@@ -52,6 +123,15 @@ export default function Dashboard() {
     wonDeals: leads.filter((l) => l.status === 'won').length,
     upcomingActivities: activities.filter((a) => !a.completed).length,
   };
+
+  const monthlyData = [
+    { month: 'Jan', revenue: 45000, leads: 12 },
+    { month: 'Feb', revenue: 52000, leads: 15 },
+    { month: 'Mar', revenue: 48000, leads: 10 },
+    { month: 'Apr', revenue: 61000, leads: 18 },
+    { month: 'May', revenue: 55000, leads: 14 },
+    { month: 'Jun', revenue: 70000, leads: 20 },
+  ];
 
   const getStatusColor = (status: string) => {
     const colors = {
@@ -77,6 +157,30 @@ export default function Dashboard() {
     return <Icon className="w-4 h-4" />;
   };
 
+  const handleAddNew = () => {
+    if (activeTab === 'leads') {
+      setEditingLead(undefined);
+      setIsLeadModalOpen(true);
+    } else if (activeTab === 'activities') {
+      setEditingActivity(undefined);
+      setIsActivityModalOpen(true);
+    } else {
+      setEditingLead(undefined);
+      setIsLeadModalOpen(true);
+    }
+  };
+
+  const handleSeedData = async () => {
+    if (!confirm('This will add sample data to your dashboard. Continue?')) return;
+
+    setSeeding(true);
+    const success = await seedSampleData();
+    if (success) {
+      await fetchData();
+    }
+    setSeeding(false);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -98,6 +202,15 @@ export default function Dashboard() {
             </div>
             <div className="flex items-center gap-4">
               <span className="text-sm text-slate-600">{user?.email}</span>
+              {leads.length === 0 && !loading && (
+                <button
+                  onClick={handleSeedData}
+                  disabled={seeding}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-lg font-medium transition disabled:opacity-50"
+                >
+                  {seeding ? 'Loading...' : 'Load Sample Data'}
+                </button>
+              )}
               <button
                 onClick={signOut}
                 className="flex items-center gap-2 px-4 py-2 text-slate-600 hover:text-slate-900 transition"
@@ -164,7 +277,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden mb-8">
           <div className="border-b border-slate-200 px-6 py-4">
             <div className="flex items-center justify-between">
               <div className="flex gap-4">
@@ -198,8 +311,21 @@ export default function Dashboard() {
                 >
                   Activities
                 </button>
+                <button
+                  onClick={() => setActiveTab('analytics')}
+                  className={`px-4 py-2 rounded-lg font-medium transition ${
+                    activeTab === 'analytics'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Analytics
+                </button>
               </div>
-              <button className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-medium transition">
+              <button
+                onClick={handleAddNew}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-medium transition"
+              >
                 <Plus className="w-4 h-4" />
                 Add New
               </button>
@@ -226,29 +352,35 @@ export default function Dashboard() {
                 <div>
                   <h3 className="text-lg font-semibold text-slate-900 mb-4">Recent Activity</h3>
                   <div className="space-y-3">
-                    {activities.slice(0, 5).map((activity) => (
-                      <div
-                        key={activity.id}
-                        className="flex items-center justify-between p-4 bg-slate-50 rounded-lg hover:bg-slate-100 transition"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="bg-white p-2 rounded-lg border border-slate-200">
-                            {getActivityIcon(activity.activity_type)}
-                          </div>
-                          <div>
-                            <div className="font-medium text-slate-900">{activity.title}</div>
-                            <div className="text-sm text-slate-500 capitalize">{activity.activity_type}</div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {activity.completed ? (
-                            <CheckCircle className="w-5 h-5 text-green-500" />
-                          ) : (
-                            <Clock className="w-5 h-5 text-orange-500" />
-                          )}
-                        </div>
+                    {activities.length === 0 ? (
+                      <div className="text-center py-8 text-slate-500">
+                        No activities yet. Click "Add New" to create your first activity.
                       </div>
-                    ))}
+                    ) : (
+                      activities.slice(0, 5).map((activity) => (
+                        <div
+                          key={activity.id}
+                          className="flex items-center justify-between p-4 bg-slate-50 rounded-lg hover:bg-slate-100 transition"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="bg-white p-2 rounded-lg border border-slate-200">
+                              {getActivityIcon(activity.activity_type)}
+                            </div>
+                            <div>
+                              <div className="font-medium text-slate-900">{activity.title}</div>
+                              <div className="text-sm text-slate-500 capitalize">{activity.activity_type}</div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {activity.completed ? (
+                              <CheckCircle className="w-5 h-5 text-green-500" />
+                            ) : (
+                              <Clock className="w-5 h-5 text-orange-500" />
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               </div>
@@ -277,9 +409,28 @@ export default function Dashboard() {
                           {lead.contact_person} • {lead.industry}
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className="font-semibold text-slate-900">${lead.estimated_value.toLocaleString()}</div>
-                        <div className="text-sm text-slate-500">{lead.probability}% probability</div>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <div className="font-semibold text-slate-900">${lead.estimated_value.toLocaleString()}</div>
+                          <div className="text-sm text-slate-500">{lead.probability}% probability</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setEditingLead(lead);
+                              setIsLeadModalOpen(true);
+                            }}
+                            className="p-2 hover:bg-slate-100 rounded-lg transition"
+                          >
+                            <Edit2 className="w-4 h-4 text-slate-600" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteLead(lead.id)}
+                            className="p-2 hover:bg-red-50 rounded-lg transition"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-600" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))
@@ -300,9 +451,12 @@ export default function Dashboard() {
                       className="flex items-center justify-between p-4 border border-slate-200 rounded-lg hover:border-emerald-300 hover:shadow-md transition"
                     >
                       <div className="flex items-center gap-4">
-                        <div className="bg-slate-100 p-3 rounded-lg">
+                        <button
+                          onClick={() => handleToggleActivityComplete(activity)}
+                          className="bg-slate-100 p-3 rounded-lg hover:bg-slate-200 transition"
+                        >
                           {getActivityIcon(activity.activity_type)}
-                        </div>
+                        </button>
                         <div>
                           <h4 className="font-semibold text-slate-900">{activity.title}</h4>
                           <div className="text-sm text-slate-600 capitalize">{activity.activity_type}</div>
@@ -317,20 +471,72 @@ export default function Dashboard() {
                             {new Date(activity.scheduled_at).toLocaleTimeString()}
                           </div>
                         </div>
-                        {activity.completed ? (
-                          <CheckCircle className="w-6 h-6 text-green-500" />
-                        ) : (
-                          <Clock className="w-6 h-6 text-orange-500" />
-                        )}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleToggleActivityComplete(activity)}
+                            className="p-2 hover:bg-slate-100 rounded-lg transition"
+                          >
+                            {activity.completed ? (
+                              <CheckCircle className="w-6 h-6 text-green-500" />
+                            ) : (
+                              <Clock className="w-6 h-6 text-orange-500" />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingActivity(activity);
+                              setIsActivityModalOpen(true);
+                            }}
+                            className="p-2 hover:bg-slate-100 rounded-lg transition"
+                          >
+                            <Edit2 className="w-4 h-4 text-slate-600" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteActivity(activity.id)}
+                            className="p-2 hover:bg-red-50 rounded-lg transition"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-600" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))
                 )}
               </div>
             )}
+
+            {activeTab === 'analytics' && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <PieChart data={getLeadsByStatus(leads)} title="Leads by Status" />
+                  <BarChart data={getLeadsBySource(leads)} title="Leads by Source" />
+                </div>
+                <LineChart data={monthlyData} title="Monthly Performance" />
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      <LeadModal
+        isOpen={isLeadModalOpen}
+        onClose={() => {
+          setIsLeadModalOpen(false);
+          setEditingLead(undefined);
+        }}
+        onSave={handleSaveLead}
+        lead={editingLead}
+      />
+
+      <ActivityModal
+        isOpen={isActivityModalOpen}
+        onClose={() => {
+          setIsActivityModalOpen(false);
+          setEditingActivity(undefined);
+        }}
+        onSave={handleSaveActivity}
+        activity={editingActivity}
+      />
     </div>
   );
 }
